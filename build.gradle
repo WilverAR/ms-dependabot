@@ -1,6 +1,17 @@
+buildscript {
+	configurations.classpath {
+		resolutionStrategy.eachDependency { details ->
+			if (details.requested.group == 'org.apache.commons' &&
+				details.requested.name == 'commons-compress') {
+				details.useVersion '1.26.0'
+			}
+		}
+	}
+}
+
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '3.4.10'
+	id 'org.springframework.boot' version '3.4.11'
 	id 'io.spring.dependency-management' version '1.1.7'
 }
 
