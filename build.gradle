@@ -1,12 +1,12 @@
-//buildscript {
-//	configurations.classpath {
-//		resolutionStrategy.eachDependency { details ->
-//			if (details.requested.group == 'org.apache.commons' && details.requested.name in ['commons-compress', 'commons-lang3']) {
-//				details.useVersion(details.requested.name == 'commons-compress' ? '1.26.0' : '3.18.0')
-//			}
-//		}
-//	}
-//}
+buildscript {
+	configurations.classpath {
+		resolutionStrategy.eachDependency { details ->
+			if (details.requested.group == 'org.apache.commons' && details.requested.name in ['commons-compress']) {
+				details.useVersion(details.requested.name == 'commons-compress' ? '1.26.0' : '3.18.0')
+			}
+		}
+	}
+}
 
 plugins {
 	id 'java'
@@ -28,24 +28,14 @@ repositories {
 	mavenCentral()
 }
 
-//dependencyManagement {
-//	imports {
-//		mavenBom 'io.netty:netty-bom:4.1.129.Final'
-//	}
-//	dependencies {
-//		dependency 'org.assertj:assertj-core:3.27.7'
-//		dependency 'ch.qos.logback:logback-core:1.5.25'
-//		dependency 'ch.qos.logback:logback-classic:1.5.25'
-//	}
-//}
-
 dependencyManagement {
-	dependencies {
-		dependency "org.yaml:snakeyaml:2.5"
-	}
-
 	imports {
-		mavenBom "org.springframework.boot:spring-boot-dependencies:3.4.11"
+		mavenBom 'io.netty:netty-bom:4.1.129.Final'
+	}
+	dependencies {
+		dependency 'org.assertj:assertj-core:3.27.7'
+		dependency 'ch.qos.logback:logback-core:1.5.25'
+//		dependency 'ch.qos.logback:logback-classic:1.5.25'
 	}
 }
 
