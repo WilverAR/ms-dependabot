@@ -18,6 +18,18 @@ repositories {
 	mavenCentral()
 }
 
+dependencyManagement {
+	imports {
+		mavenBom 'io.netty:netty-bom:4.1.129.Final'
+	}
+	dependencies {
+		dependency 'org.assertj:assertj-core:3.27.7'
+		dependency 'org.apache.commons:commons-compress:1.26.0'
+		dependency 'ch.qos.logback:logback-core:1.5.25'
+		dependency 'ch.qos.logback:logback-classic:1.5.25'
+	}
+}
+
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webflux'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
