@@ -2,8 +2,10 @@ buildscript {
 	configurations.classpath {
 		resolutionStrategy.eachDependency { details ->
 			if (details.requested.group == 'org.apache.commons' &&
-				details.requested.name == 'commons-compress') {
-				details.useVersion '1.26.0'
+				details.requested.name in ['commons-compress', 'commons-lang3']) {
+				details.useVersion(details.requested.name == 'commons-compress'
+					? '1.26.0'
+					: '3.18.0')
 			}
 		}
 	}
@@ -36,6 +38,7 @@ dependencyManagement {
 	dependencies {
 		dependency 'org.assertj:assertj-core:3.27.7'
 		dependency 'org.apache.commons:commons-compress:1.26.0'
+		dependency 'org.apache.commons:commons-lang3:3.18.0'
 		dependency 'ch.qos.logback:logback-core:1.5.25'
 		dependency 'ch.qos.logback:logback-classic:1.5.25'
 	}
