@@ -81,11 +81,14 @@ jobs:
 
             for (const alert of alerts) {
               try {
-                const res = await github.rest.dependabot.createAlertSecurityUpdate({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  alert_number: alert.alert_number,
-                });
+                const res = await github.request(
+                  "POST /repos/{owner}/{repo}/dependabot/alerts/{alert_number}/security-updates",
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    alert_number: alert.alert_number,
+                  }
+                );
                 const prUrl = res.data?.pull_request?.html_url || res.data?.pull_request?.url || null;
                 if (prUrl) {
                   createdPrs.push(prUrl);
