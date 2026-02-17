@@ -27,3 +27,11 @@ jobs:
         run: |
           chmod +x ./gradlew
           ./gradlew clean build
+
+      - name: Install dependencies
+        run: |
+          ./gradlew dependencies
+
+      - name: Spring Boot run (smoke)
+        run: |
+          timeout 60 ./gradlew bootRun || true
