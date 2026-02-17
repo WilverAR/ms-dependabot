@@ -2,11 +2,6 @@
   "extends": [
     "config:base"
   ],
-  "onboarding": false,
-  "requireConfig": "optional",
-  "repositories": [
-    "WilverAR/ms-dependabot"
-  ],
   "baseBranches": [
     "main"
   ],
@@ -17,15 +12,10 @@
   "separateMultipleMajor": false,
   "groupName": "security-fixes",
   "groupSlug": "security-fixes",
+  "dependencyDashboard": false,
   "packageRules": [
     {
-      "matchUpdateTypes": [
-        "major",
-        "minor",
-        "patch",
-        "pin",
-        "digest"
-      ],
+      "matchVulnerabilityAlerts": false,
       "enabled": false
     }
   ],
