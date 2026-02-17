@@ -5,9 +5,11 @@ on:
     branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  security-events: read
 
 jobs:
   build:
@@ -35,3 +37,48 @@ jobs:
       - name: Spring Boot run (smoke)
         run: |
           timeout 60 ./gradlew bootRun || true
+
+  dependabot-analyze:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot alerts
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.RENOVATE_TOKEN }}
+          script: |
+            const fs = require("fs");
+
+            const alerts = await github.paginate(
+              github.rest.dependabot.listAlertsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              }
+            );
+
+            const mapped = alerts.map((alert) => {
+              const vuln = alert.security_vulnerability || {};
+              const pkg = vuln.package || {};
+              const patched = vuln.first_patched_version || {};
+              const advisory = alert.security_advisory || {};
+              return {
+                alert_number: alert.number,
+                ecosystem: pkg.ecosystem || null,
+                name: pkg.name || null,
+                fixed_version: patched.identifier || null,
+                manifest_path: alert.dependency?.manifest_path || null,
+                severity: advisory.severity || null,
+              };
+            });
+
+            fs.writeFileSync("dependabot-alerts.json", JSON.stringify(mapped, null, 2));
+            core.info(`Alerts written: ${mapped.length}`);
+
+      - name: Upload alerts artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-alerts
+          path: dependabot-alerts.json
