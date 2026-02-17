@@ -12,10 +12,15 @@
   "separateMultipleMajor": false,
   "groupName": "security-fixes",
   "groupSlug": "security-fixes",
-  "dependencyDashboard": false,
   "packageRules": [
     {
-      "matchVulnerabilityAlerts": false,
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
       "enabled": false
     }
   ],
