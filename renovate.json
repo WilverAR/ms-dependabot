@@ -2,6 +2,9 @@
   "extends": [
     "config:base"
   ],
+  "repositories": [
+    "WilverAR/ms-dependabot"
+  ],
   "baseBranches": [
     "feature/auto-fix"
   ],
