@@ -2,6 +2,8 @@
   "extends": [
     "config:base"
   ],
+  "onboarding": false,
+  "requireConfig": "optional",
   "repositories": [
     "WilverAR/ms-dependabot"
   ],
