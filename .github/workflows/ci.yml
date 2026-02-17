@@ -38,6 +38,7 @@ jobs:
           timeout 60 ./gradlew bootRun || true
 
   dependabot-analyze:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Fetch Dependabot alerts
