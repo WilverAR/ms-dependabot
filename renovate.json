@@ -4,6 +4,9 @@
   ],
   "onboarding": false,
   "requireConfig": "optional",
+  "repositories": [
+    "WilverAR/ms-dependabot"
+  ],
   "baseBranches": [
     "main"
   ],
