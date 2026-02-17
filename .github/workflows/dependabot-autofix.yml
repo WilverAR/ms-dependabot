@@ -28,7 +28,7 @@ jobs:
         id: alerts
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
+          github-token: ${{ secrets.RENOVATE_TOKEN }}
           script: |
             const fs = require("fs");
 
