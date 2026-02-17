@@ -46,17 +46,24 @@ jobs:
               const vuln = alert.security_vulnerability || {};
               const pkg = vuln.package || {};
               const patched = vuln.first_patched_version || {};
+              const advisory = alert.security_advisory || {};
               return {
                 alert_number: alert.number,
                 ecosystem: pkg.ecosystem || null,
                 name: pkg.name || null,
                 fixed_version: patched.identifier || null,
                 manifest_path: alert.dependency?.manifest_path || null,
+                severity: advisory.severity || null,
               };
             });
 
             fs.writeFileSync("dependabot-alerts.json", JSON.stringify(mapped, null, 2));
             core.info(`Alerts written: ${mapped.length}`);
+            for (const item of mapped) {
+              core.info(
+                `alert#${item.alert_number} ${item.name} fixed=${item.fixed_version} manifest=${item.manifest_path} severity=${item.severity}`
+              );
+            }
             core.setOutput("has_alerts", mapped.length > 0 ? "true" : "false");
 
       - name: Apply fixes in build.gradle
@@ -65,6 +72,13 @@ jobs:
         run: |
           node scripts/dependabot-aggregate-fix.js
         shell: bash
+
+      - name: Upload alerts artifact
+        if: steps.alerts.outputs.has_alerts == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-alerts
+          path: dependabot-alerts.json
 
       - name: Cleanup alert file
         if: steps.alerts.outputs.has_alerts == 'true'
