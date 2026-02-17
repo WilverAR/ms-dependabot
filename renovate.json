@@ -1,0 +1,27 @@
+{
+  "extends": [
+    "config:base"
+  ],
+  "baseBranches": [
+    "feature/auto-fix"
+  ],
+  "prConcurrentLimit": 1,
+  "prHourlyLimit": 0,
+  "separateMajorMinor": false,
+  "separateMinorPatch": false,
+  "separateMultipleMajor": false,
+  "groupName": "all-dependencies",
+  "groupSlug": "all-dependencies",
+  "packageRules": [
+    {
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "all-dependencies"
+    }
+  ]
+}
