@@ -178,16 +178,18 @@ jobs:
                 content = content.replace(refRegex, replacement);
                 updates.push(`${pkg} -> ${fixedVersion} (updated existing reference)`);
               } else {
-                updates.push(`${pkg} -> ${fixedVersion} (will add constraint)`);
+                updates.push(`${pkg} -> ${fixedVersion} (will add implementation dependency)`);
               }
             }
 
-            const depIdx = content.indexOf("dependencies {");
-            if (depIdx < 0) {
-              core.setFailed("dependencies block not found in build.gradle");
+            const depMatches = [...content.matchAll(/dependencies\\s*\\{/g)];
+            if (!depMatches.length) {
+              core.setFailed("No dependencies block found in build.gradle");
               return;
             }
 
+            // Use the last dependencies block as the main project dependencies section.
+            const depIdx = depMatches[depMatches.length - 1].index;
             const openIdx = content.indexOf("{", depIdx);
             let depth = 0;
             let closeIdx = -1;
@@ -211,15 +213,15 @@ jobs:
             const depsBlock = content.slice(depIdx, closeIdx + 1);
             const missing = [];
             for (const [pkg, fixedVersion] of targetByPackage.entries()) {
-              const exists = new RegExp(`['"]${escapeRegex(pkg)}:[^'"]+['"]`).test(depsBlock);
+              const exists = new RegExp(`['"]${escapeRegex(pkg)}:[^'"]+['"]`).test(content);
               if (!exists) {
-                missing.push(`\t\timplementation '${pkg}:${fixedVersion}'`);
+                missing.push(`\timplementation '${pkg}:${fixedVersion}'`);
               }
             }
 
             if (missing.length) {
-              const constraintBlock = `\n\tconstraints {\n${missing.join("\n")}\n\t}\n`;
-              content = content.slice(0, closeIdx) + constraintBlock + content.slice(closeIdx);
+              const additions = `\n${missing.join("\n")}\n`;
+              content = content.slice(0, closeIdx) + additions + content.slice(closeIdx);
             }
 
             fs.writeFileSync(buildFile, content, "utf8");
