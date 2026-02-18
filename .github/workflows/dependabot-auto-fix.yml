@@ -16,6 +16,7 @@ permissions:
 jobs:
   # Job 1: snapshot dependencies and collect open Dependabot alerts.
   dependabot-analyze:
+    name: Analyze Alerts And Build Snapshot
     runs-on: ubuntu-latest
     permissions: write-all
     steps:
@@ -88,6 +89,7 @@ jobs:
 
   # Job 2: apply fixes to build.gradle and validate build safety.
   dependabot-auto-fix:
+    name: Apply Auto Fixes And Validate Build
     needs: dependabot-analyze
     runs-on: ubuntu-latest
     permissions:
