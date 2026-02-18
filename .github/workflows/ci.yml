@@ -182,7 +182,7 @@ jobs:
               }
             }
 
-            const depMatches = [...content.matchAll(/dependencies\\s*\\{/g)];
+            const depMatches = [...content.matchAll(/dependencies\s*\{/g)];
             if (!depMatches.length) {
               core.setFailed("No dependencies block found in build.gradle");
               return;
