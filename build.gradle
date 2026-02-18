@@ -34,12 +34,15 @@ dependencyManagement {
 	}
 	dependencies {
 		dependency 'org.assertj:assertj-core:3.27.7'
+		
+		dependency 'org.apache.activemq:artemis-project:2.40.0'
+		dependency 'ch.qos.logback:logback-core:1.5.25'
 	}
 }
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webflux'
-	implementation 'org.apache.logging.log4j:log4j-core:2.14.1'
+	implementation 'org.apache.logging.log4j:log4j-core:2.25.3'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'io.projectreactor:reactor-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
