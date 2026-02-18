@@ -57,7 +57,7 @@ jobs:
       - name: Fetch Dependabot alerts
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.RENOVATE_TOKEN }}
           script: |
             const fs = require("fs");
 
@@ -238,3 +238,4 @@ jobs:
             build.gradle
             dependabot-remediation.patch
             remediation-summary.txt
+
