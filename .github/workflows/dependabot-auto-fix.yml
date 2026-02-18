@@ -40,18 +40,21 @@ jobs:
           script: |
             const fs = require("fs");
 
-            // Read all open alerts using explicit REST pagination.
+            // Read all open alerts using the explicit Dependabot REST endpoint route.
             const alerts = [];
             const perPage = 100;
             let page = 1;
             while (true) {
-              const response = await github.rest.dependabot.listAlertsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: "open",
-                per_page: perPage,
-                page,
-              });
+              const response = await github.request(
+                "GET /repos/{owner}/{repo}/dependabot/alerts",
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: "open",
+                  per_page: perPage,
+                  page,
+                }
+              );
               alerts.push(...response.data);
               if (response.data.length < perPage) break;
               page++;
