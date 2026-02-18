@@ -1,10 +1,12 @@
-name: Dependabot Remediation
+name: Dependabot Auto Fix
 
 on:
+  # Manual trigger to avoid racing Dependabot indexing.
   workflow_dispatch:
 
 concurrency:
-  group: dependabot-remediation-${{ github.ref }}
+  # Prevent overlapping runs for the same branch/ref.
+  group: dependabot-auto-fix-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -12,6 +14,7 @@ permissions:
   security-events: read
 
 jobs:
+  # Job 1: snapshot dependencies and collect open Dependabot alerts.
   dependabot-analyze:
     runs-on: ubuntu-latest
     permissions: write-all
@@ -37,6 +40,7 @@ jobs:
           script: |
             const fs = require("fs");
 
+            // Read all open alerts and paginate through the full result set.
             const alerts = await github.paginate(
               github.rest.dependabot.listAlertsForRepo,
               {
@@ -47,6 +51,7 @@ jobs:
               }
             );
 
+            // Keep only fields used by the remediation logic.
             const mapped = alerts.map((alert) => {
               const vuln = alert.security_vulnerability || {};
               const pkg = vuln.package || {};
@@ -62,16 +67,18 @@ jobs:
               };
             });
 
+            // Store normalized alerts as artifact for the next job.
             fs.writeFileSync("dependabot-alerts.json", JSON.stringify(mapped, null, 2));
             core.info(`Alerts written: ${mapped.length}`);
 
       - name: Upload alerts artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dependabot-alerts-${{ github.run_id }}
+          name: dependabot-auto-fix-alerts-${{ github.run_id }}
           path: dependabot-alerts.json
 
-  dependabot-remediate:
+  # Job 2: apply fixes to build.gradle and validate build safety.
+  dependabot-auto-fix:
     needs: dependabot-analyze
     runs-on: ubuntu-latest
     permissions:
@@ -84,6 +91,7 @@ jobs:
 
       - name: Print run revision
         run: |
+          # Traceability: confirm run SHA equals checked-out HEAD.
           echo "workflow ref: ${{ github.ref }}"
           echo "workflow sha: ${{ github.sha }}"
           git rev-parse HEAD
@@ -91,7 +99,7 @@ jobs:
       - name: Download alerts artifact
         uses: actions/download-artifact@v4
         with:
-          name: dependabot-alerts-${{ github.run_id }}
+          name: dependabot-auto-fix-alerts-${{ github.run_id }}
           path: .
 
       - name: Apply vulnerability fixes into build.gradle
@@ -100,6 +108,7 @@ jobs:
           script: |
             const fs = require("fs");
 
+            // Input artifact and target file.
             const alertsPath = "dependabot-alerts.json";
             const buildFile = "build.gradle";
 
@@ -108,6 +117,7 @@ jobs:
               return;
             }
 
+            // Only Maven alerts with an available fixed version are actionable.
             const alerts = JSON.parse(fs.readFileSync(alertsPath, "utf8"));
             const mavenAlerts = alerts.filter(
               (a) => a?.ecosystem === "maven" && a?.name && a?.fixed_version
@@ -118,6 +128,7 @@ jobs:
               return;
             }
 
+            // Helpers to compare semantic-like versions and to escape regex input.
             const escapeRegex = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
             const tokenize = (v) =>
@@ -139,6 +150,7 @@ jobs:
               return 0;
             };
 
+            // Choose the highest fixed version per package from all alert entries.
             const targetByPackage = new Map();
             for (const alert of mavenAlerts) {
               const current = targetByPackage.get(alert.name);
@@ -167,6 +179,7 @@ jobs:
               return;
             }
 
+            // Apply in-place updates for already-declared dependencies.
             let content = fs.readFileSync(buildFile, "utf8");
             const updates = [];
             const missingPackages = [];
@@ -182,6 +195,7 @@ jobs:
               }
             }
 
+            // Utilities to find top-level and nested Gradle blocks by text parsing.
             const findBlockRange = (src, regex, useLast = false) => {
               const matches = [...src.matchAll(regex)];
               if (!matches.length) return null;
@@ -260,6 +274,7 @@ jobs:
               return;
             }
 
+            // Prepare insertion lines for packages not currently declared.
             const importLines = [];
             const depMgmtDepLines = [];
             const mainDepLines = [];
@@ -279,6 +294,7 @@ jobs:
               }
             }
 
+            // Insert from the end of file backwards to keep indexes stable.
             const insertions = [];
             if (depMgmtImportsRange && importLines.length) {
               insertions.push({ idx: depMgmtImportsRange.end, text: `\n${importLines.join("\n")}\n` });
@@ -296,6 +312,7 @@ jobs:
                 content = content.slice(0, entry.idx) + entry.text + content.slice(entry.idx);
               });
 
+            // Persist output files for inspection and later PR creation.
             fs.writeFileSync(buildFile, content, "utf8");
             fs.writeFileSync("remediation-summary.txt", updates.join("\n") + "\n", "utf8");
             core.info(`Remediation applied for ${targetByPackage.size} package(s).`);
@@ -303,22 +320,23 @@ jobs:
       - name: Create remediation patch artifact
         if: always()
         run: |
-          git diff -- build.gradle > dependabot-remediation.patch
+          git diff -- build.gradle > dependabot-auto-fix.patch
 
       - name: Upload remediation artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dependabot-remediation-${{ github.run_id }}
+          name: dependabot-auto-fix-${{ github.run_id }}
           path: |
             build.gradle
-            dependabot-remediation.patch
+            dependabot-auto-fix.patch
             remediation-summary.txt
 
       - name: Validate remediated build
         id: validate
         continue-on-error: true
         run: |
+          # Validation runs after artifacts are uploaded so failures are debuggable.
           chmod +x ./gradlew
           ./gradlew clean test
 
