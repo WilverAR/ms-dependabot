@@ -162,6 +162,21 @@ jobs:
                 targetByPackage.set(alert.name, alert.fixed_version);
               }
             }
+            // Keep critical families aligned to avoid runtime API mismatches.
+            if (targetByPackage.has("ch.qos.logback:logback-core")) {
+              const v = targetByPackage.get("ch.qos.logback:logback-core");
+              const cur = targetByPackage.get("ch.qos.logback:logback-classic");
+              if (!cur || compareVersions(v, cur) > 0) {
+                targetByPackage.set("ch.qos.logback:logback-classic", v);
+              }
+            }
+            if (targetByPackage.has("ch.qos.logback:logback-classic")) {
+              const v = targetByPackage.get("ch.qos.logback:logback-classic");
+              const cur = targetByPackage.get("ch.qos.logback:logback-core");
+              if (!cur || compareVersions(v, cur) > 0) {
+                targetByPackage.set("ch.qos.logback:logback-core", v);
+              }
+            }
 
             if (!fs.existsSync(buildFile)) {
               core.setFailed("build.gradle was not found.");
@@ -242,6 +257,10 @@ jobs:
             const depMgmtDepsRange = findBlockInside(content, depMgmtRange, /dependencies\s*\{/g, true);
 
             const depMatches = [...content.matchAll(/dependencies\s*\{/g)];
+            if (!depMatches.length) {
+              core.setFailed("No dependencies block found in build.gradle.");
+              return;
+            }
             const mainDepCandidates = depMatches.filter((m) => {
               if (!depMgmtRange) return true;
               return m.index < depMgmtRange.start || m.index > depMgmtRange.end;
@@ -298,10 +317,12 @@ jobs:
             core.info(`Remediation applied for ${targetByPackage.size} package(s).`);
 
       - name: Create remediation patch artifact
+        if: always()
         run: |
           git diff -- build.gradle > dependabot-remediation.patch
 
       - name: Upload remediation artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependabot-remediation
@@ -309,4 +330,17 @@ jobs:
             build.gradle
             dependabot-remediation.patch
             remediation-summary.txt
+
+      - name: Validate remediated build
+        id: validate
+        continue-on-error: true
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean test
+
+      - name: Fail when remediation is not build-safe
+        if: steps.validate.outcome != 'success'
+        run: |
+          echo "Remediation produced an invalid build. Check dependabot-remediation artifact."
+          exit 1
 
