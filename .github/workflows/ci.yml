@@ -57,7 +57,7 @@ jobs:
       - name: Fetch Dependabot alerts
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.RENOVATE_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require("fs");
 
@@ -94,3 +94,147 @@ jobs:
         with:
           name: dependabot-alerts
           path: dependabot-alerts.json
+
+  dependabot-remediate:
+    needs: dependabot-analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download alerts artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dependabot-alerts
+          path: .
+
+      - name: Apply vulnerability fixes into build.gradle
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+
+            const alertsPath = "dependabot-alerts.json";
+            const buildFile = "build.gradle";
+
+            if (!fs.existsSync(alertsPath)) {
+              core.setFailed("dependabot-alerts.json was not found.");
+              return;
+            }
+
+            const alerts = JSON.parse(fs.readFileSync(alertsPath, "utf8"));
+            const mavenAlerts = alerts.filter(
+              (a) => a?.ecosystem === "maven" && a?.name && a?.fixed_version
+            );
+
+            if (!mavenAlerts.length) {
+              core.info("No maven alerts with fixed versions. Nothing to remediate.");
+              return;
+            }
+
+            const escapeRegex = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+            const tokenize = (v) =>
+              String(v)
+                .split(/[\.-]/)
+                .map((p) => (/^\d+$/.test(p) ? Number(p) : p.toLowerCase()));
+
+            const compareVersions = (a, b) => {
+              const ta = tokenize(a);
+              const tb = tokenize(b);
+              const len = Math.max(ta.length, tb.length);
+              for (let i = 0; i < len; i++) {
+                const va = ta[i] ?? 0;
+                const vb = tb[i] ?? 0;
+                if (va === vb) continue;
+                if (typeof va === "number" && typeof vb === "number") return va - vb;
+                return String(va).localeCompare(String(vb));
+              }
+              return 0;
+            };
+
+            const targetByPackage = new Map();
+            for (const alert of mavenAlerts) {
+              const current = targetByPackage.get(alert.name);
+              if (!current || compareVersions(alert.fixed_version, current) > 0) {
+                targetByPackage.set(alert.name, alert.fixed_version);
+              }
+            }
+
+            if (!fs.existsSync(buildFile)) {
+              core.setFailed("build.gradle was not found.");
+              return;
+            }
+
+            let content = fs.readFileSync(buildFile, "utf8");
+            const updates = [];
+
+            for (const [pkg, fixedVersion] of targetByPackage.entries()) {
+              const refRegex = new RegExp(`(['"])${escapeRegex(pkg)}:[^'"]+\\1`, "g");
+              const replacement = `'${pkg}:${fixedVersion}'`;
+              if (refRegex.test(content)) {
+                content = content.replace(refRegex, replacement);
+                updates.push(`${pkg} -> ${fixedVersion} (updated existing reference)`);
+              } else {
+                updates.push(`${pkg} -> ${fixedVersion} (will add constraint)`);
+              }
+            }
+
+            const depIdx = content.indexOf("dependencies {");
+            if (depIdx < 0) {
+              core.setFailed("dependencies block not found in build.gradle");
+              return;
+            }
+
+            const openIdx = content.indexOf("{", depIdx);
+            let depth = 0;
+            let closeIdx = -1;
+            for (let i = openIdx; i < content.length; i++) {
+              const ch = content[i];
+              if (ch === "{") depth++;
+              if (ch === "}") {
+                depth--;
+                if (depth === 0) {
+                  closeIdx = i;
+                  break;
+                }
+              }
+            }
+
+            if (closeIdx < 0) {
+              core.setFailed("Could not find end of dependencies block.");
+              return;
+            }
+
+            const depsBlock = content.slice(depIdx, closeIdx + 1);
+            const missing = [];
+            for (const [pkg, fixedVersion] of targetByPackage.entries()) {
+              const exists = new RegExp(`['"]${escapeRegex(pkg)}:[^'"]+['"]`).test(depsBlock);
+              if (!exists) {
+                missing.push(`\t\timplementation '${pkg}:${fixedVersion}'`);
+              }
+            }
+
+            if (missing.length) {
+              const constraintBlock = `\n\tconstraints {\n${missing.join("\n")}\n\t}\n`;
+              content = content.slice(0, closeIdx) + constraintBlock + content.slice(closeIdx);
+            }
+
+            fs.writeFileSync(buildFile, content, "utf8");
+            fs.writeFileSync("remediation-summary.txt", updates.join("\n") + "\n", "utf8");
+            core.info(`Remediation applied for ${targetByPackage.size} package(s).`);
+
+      - name: Create remediation patch artifact
+        run: |
+          git diff -- build.gradle > dependabot-remediation.patch
+
+      - name: Upload remediation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-remediation
+          path: |
+            build.gradle
+            dependabot-remediation.patch
+            remediation-summary.txt
