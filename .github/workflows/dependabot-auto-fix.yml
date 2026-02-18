@@ -16,7 +16,7 @@ permissions:
 jobs:
   # Job 1: snapshot dependencies and collect open Dependabot alerts.
   dependabot-analyze:
-    name: Analyze Alerts And Build Snapshot
+    name: Analyze Alerts
     runs-on: ubuntu-latest
     permissions: write-all
     steps:
@@ -42,23 +42,29 @@ jobs:
             const fs = require("fs");
 
             // Read all open alerts using the explicit Dependabot REST endpoint route.
+            // This endpoint does not support `page`; follow pagination via Link headers.
             const alerts = [];
-            const perPage = 100;
-            let page = 1;
-            while (true) {
-              const response = await github.request(
-                "GET /repos/{owner}/{repo}/dependabot/alerts",
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: "open",
-                  per_page: perPage,
-                  page,
+            let requestUrl =
+              `GET /repos/${context.repo.owner}/${context.repo.repo}/dependabot/alerts?state=open&per_page=100`;
+
+            const extractNextUrl = (linkHeader) => {
+              if (!linkHeader) return null;
+              const parts = linkHeader.split(",");
+              for (const part of parts) {
+                const section = part.trim();
+                if (section.includes('rel="next"')) {
+                  const start = section.indexOf("<");
+                  const end = section.indexOf(">");
+                  if (start >= 0 && end > start) return section.slice(start + 1, end);
                 }
-              );
+              }
+              return null;
+            };
+
+            while (requestUrl) {
+              const response = await github.request(requestUrl);
               alerts.push(...response.data);
-              if (response.data.length < perPage) break;
-              page++;
+              requestUrl = extractNextUrl(response.headers.link);
             }
 
             // Keep only fields used by the remediation logic.
@@ -84,12 +90,12 @@ jobs:
       - name: Upload alerts artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dependabot-auto-fix-alerts-json-${{ github.run_id }}
+          name: dependabot-alerts-json-${{ github.run_id }}
           path: dependabot-alerts.json
 
   # Job 2: apply fixes to build.gradle and validate build safety.
   dependabot-auto-fix:
-    name: Apply Auto Fixes And Validate Build
+    name: Apply Fixes
     needs: dependabot-analyze
     runs-on: ubuntu-latest
     permissions:
@@ -110,7 +116,7 @@ jobs:
       - name: Download alerts artifact
         uses: actions/download-artifact@v4
         with:
-          name: dependabot-auto-fix-alerts-json-${{ github.run_id }}
+          name: dependabot-alerts-json-${{ github.run_id }}
           path: .
 
       - name: Apply vulnerability fixes into build.gradle
