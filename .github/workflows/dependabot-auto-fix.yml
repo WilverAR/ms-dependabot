@@ -350,6 +350,27 @@ jobs:
               }
             }
 
+            // Companion classpath rules: some plugin-classpath fixes require aligned pairs.
+            const classpathCompanions = new Map([
+              ["org.apache.commons:commons-compress", [["org.apache.commons:commons-lang3", "3.18.0"]]],
+              ["org.apache.commons:commons-lang3", [["org.apache.commons:commons-compress", "1.26.0"]]],
+            ]);
+            const classpathOverrideMap = new Map(classpathOverrides.map(([pkg, v]) => [pkg, v]));
+            for (const [pkg] of classpathOverrides) {
+              const companions = classpathCompanions.get(pkg) || [];
+              for (const [companionPkg, defaultVersion] of companions) {
+                if (!classpathOverrideMap.has(companionPkg)) {
+                  const companionVersion = targetByPackage.get(companionPkg) || defaultVersion;
+                  classpathOverrideMap.set(companionPkg, companionVersion);
+                  updates.push(
+                    `${companionPkg} -> ${companionVersion} (managed buildscript companion override)`
+                  );
+                }
+              }
+            }
+            classpathOverrides.length = 0;
+            classpathOverrides.push(...classpathOverrideMap.entries());
+
             const buildscriptMarkerStart = "// dependabot-auto-fix:buildscript-classpath-overrides:start";
             const buildscriptMarkerEnd = "// dependabot-auto-fix:buildscript-classpath-overrides:end";
             const esc = (v) => String(v).replace(/'/g, "\\'");
