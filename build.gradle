@@ -1,20 +1,3 @@
-// dependabot-auto-fix:buildscript-classpath-overrides:start
-buildscript {
-	configurations.classpath {
-		resolutionStrategy.eachDependency { details ->
-			if (details.requested.group == 'org.apache.activemq' && details.requested.name == 'artemis-project') {
-				details.useVersion('2.40.0')
-			}
-			if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-compress') {
-				details.useVersion('1.26.0')
-			}
-			if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-lang3') {
-				details.useVersion('3.18.0')
-			}
-		}
-	}
-}
-// dependabot-auto-fix:buildscript-classpath-overrides:end
 plugins {
 	id 'java'
 	id 'org.springframework.boot' version '3.4.10'
@@ -37,16 +20,8 @@ repositories {
 
 dependencyManagement {
 	imports {
-		mavenBom 'io.netty:netty-bom:4.1.129.Final'
 	}
 	dependencies {
-		dependency 'org.assertj:assertj-core:3.27.7'
-		dependency 'ch.qos.logback:logback-core:1.5.25'
-		dependency 'ch.qos.logback:logback-classic:1.5.25'
-		dependency 'org.apache.activemq:artemis-project:2.40.0'
-		dependency 'io.netty:netty-codec-http:4.1.129.Final'
-		dependency 'org.apache.commons:commons-compress:1.26.0'
-		dependency 'org.apache.commons:commons-lang3:3.18.0'
 	}
 }
 
