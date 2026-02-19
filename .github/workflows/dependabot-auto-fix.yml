@@ -563,6 +563,7 @@ jobs:
           fi
 
           cp .autofix-results/build.gradle build.gradle
+          rm -rf .autofix-results
 
           if git diff --quiet -- build.gradle; then
             echo "No changes to open PR."
@@ -570,6 +571,12 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate clean workspace for PR action
+        if: steps.prepare.outputs.changed == 'true'
+        run: |
+          git status --short
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Create auto-fix pull request
         if: steps.prepare.outputs.changed == 'true'
