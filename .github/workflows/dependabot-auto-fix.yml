@@ -420,16 +420,23 @@ jobs:
             };
 
             const classpathOverrideMap = new Map(classpathOverrides.map(([pkg, v]) => [pkg, v]));
+            const upsertHigher = (pkg, candidateVersion, reasonLabel) => {
+              if (!candidateVersion) return;
+              const currentVersion = classpathOverrideMap.get(pkg);
+              if (!currentVersion || compareVersions(candidateVersion, currentVersion) > 0) {
+                classpathOverrideMap.set(pkg, candidateVersion);
+                updates.push(`${pkg} -> ${candidateVersion} (${reasonLabel})`);
+              }
+            };
             for (const [pkg, fixedVersion] of [...classpathOverrideMap.entries()]) {
               const pomCompanions = await getPomCompanions(pkg, fixedVersion);
               for (const [companionPkg, companionVersionFromPom] of pomCompanions) {
-                if (!classpathOverrideMap.has(companionPkg)) {
-                  const companionVersion = targetByPackage.get(companionPkg) || companionVersionFromPom;
-                  classpathOverrideMap.set(companionPkg, companionVersion);
-                  updates.push(
-                    `${companionPkg} -> ${companionVersion} (managed buildscript metadata companion override)`
-                  );
-                }
+                const companionVersion = targetByPackage.get(companionPkg) || companionVersionFromPom;
+                upsertHigher(
+                  companionPkg,
+                  companionVersion,
+                  "managed buildscript metadata companion override"
+                );
               }
             }
 
@@ -441,13 +448,8 @@ jobs:
             for (const [pkg] of classpathOverrideMap.entries()) {
               const companions = classpathCompanions.get(pkg) || [];
               for (const [companionPkg, defaultVersion] of companions) {
-                if (!classpathOverrideMap.has(companionPkg)) {
-                  const companionVersion = targetByPackage.get(companionPkg) || defaultVersion;
-                  classpathOverrideMap.set(companionPkg, companionVersion);
-                  updates.push(
-                    `${companionPkg} -> ${companionVersion} (managed buildscript companion override)`
-                  );
-                }
+                const companionVersion = targetByPackage.get(companionPkg) || defaultVersion;
+                upsertHigher(companionPkg, companionVersion, "managed buildscript companion override");
               }
             }
             classpathOverrides.length = 0;
