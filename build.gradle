@@ -40,7 +40,6 @@ dependencyManagement {
 		dependency 'ch.qos.logback:logback-classic:1.5.25'
 		dependency 'org.apache.activemq:artemis-project:2.40.0'
 		dependency 'io.netty:netty-codec-http:4.1.129.Final'
-		dependency 'org.apache.commons:commons-compress:1.26.0'
 	}
 }
 
