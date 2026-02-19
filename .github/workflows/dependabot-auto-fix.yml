@@ -168,12 +168,19 @@ jobs:
             };
 
             // Choose the highest fixed version per package from all alert entries.
+            // Also keep minimal metadata to infer whether fallback should target plugin classpath.
             const targetByPackage = new Map();
+            const packageMeta = new Map();
             for (const alert of mavenAlerts) {
               const current = targetByPackage.get(alert.name);
               if (!current || compareVersions(alert.fixed_version, current) > 0) {
                 targetByPackage.set(alert.name, alert.fixed_version);
               }
+              const meta = packageMeta.get(alert.name) || { manifestPaths: new Set() };
+              if (alert.manifest_path) {
+                meta.manifestPaths.add(String(alert.manifest_path).toLowerCase());
+              }
+              packageMeta.set(alert.name, meta);
             }
             // Keep critical families aligned to avoid runtime API mismatches.
             if (targetByPackage.has("ch.qos.logback:logback-core")) {
@@ -328,6 +335,65 @@ jobs:
               .forEach((entry) => {
                 content = content.slice(0, entry.idx) + entry.text + content.slice(entry.idx);
               });
+
+            // Dynamic fallback for plugin/classpath vulnerabilities:
+            // If alert source is settings.gradle and dependency still requires explicit classpath pinning,
+            // maintain a managed buildscript resolution block.
+            const classpathOverrides = [];
+            for (const [pkg, fixedVersion] of targetByPackage.entries()) {
+              const [group, artifact] = pkg.split(":");
+              const isBom = /(^|-)bom$/i.test(artifact || "");
+              const manifests = packageMeta.get(pkg)?.manifestPaths || new Set();
+              const fromSettings = manifests.has("settings.gradle");
+              if (fromSettings && !isBom && group && artifact) {
+                classpathOverrides.push([pkg, fixedVersion]);
+              }
+            }
+
+            const buildscriptMarkerStart = "// dependabot-auto-fix:buildscript-classpath-overrides:start";
+            const buildscriptMarkerEnd = "// dependabot-auto-fix:buildscript-classpath-overrides:end";
+            const esc = (v) => String(v).replace(/'/g, "\\'");
+            const renderBuildscriptOverrides = (items) => {
+              if (!items.length) return "";
+              const rules = items
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([pkg, fixedVersion]) => {
+                  const [group, artifact] = pkg.split(":");
+                  return [
+                    `      if (details.requested.group == '${esc(group)}' && details.requested.name == '${esc(artifact)}') {`,
+                    `        details.useVersion('${esc(fixedVersion)}')`,
+                    "      }",
+                  ].join("\n");
+                })
+                .join("\n");
+
+              return [
+                buildscriptMarkerStart,
+                "buildscript {",
+                "  configurations.classpath {",
+                "    resolutionStrategy.eachDependency { details ->",
+                rules,
+                "    }",
+                "  }",
+                "}",
+                buildscriptMarkerEnd,
+                "",
+              ].join("\n");
+            };
+
+            const managedBuildscriptRegex = new RegExp(
+              `${escapeRegex(buildscriptMarkerStart)}[\\s\\S]*?${escapeRegex(buildscriptMarkerEnd)}\\n?`,
+              "m"
+            );
+            const renderedBuildscript = renderBuildscriptOverrides(classpathOverrides);
+            if (managedBuildscriptRegex.test(content)) {
+              content = content.replace(managedBuildscriptRegex, renderedBuildscript);
+            } else if (renderedBuildscript) {
+              content = `${renderedBuildscript}${content}`;
+            }
+            for (const [pkg, fixedVersion] of classpathOverrides) {
+              updates.push(`${pkg} -> ${fixedVersion} (managed buildscript classpath override)`);
+            }
 
             // Persist output files for inspection and later PR creation.
             fs.writeFileSync(buildFile, content, "utf8");
