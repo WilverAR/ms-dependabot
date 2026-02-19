@@ -9,7 +9,7 @@ buildscript {
 				details.useVersion('1.26.0')
 			}
 			if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-lang3') {
-				details.useVersion('3.14.0')
+				details.useVersion('3.18.0')
 			}
 		}
 	}
