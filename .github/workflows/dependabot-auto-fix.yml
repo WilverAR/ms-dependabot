@@ -350,13 +350,95 @@ jobs:
               }
             }
 
+            // Resolve companion dependencies from Maven metadata (POM) to avoid hardcoded pairs only.
+            const pomCache = new Map();
+            const mavenPomUrl = (group, artifact, version) =>
+              `https://repo1.maven.org/maven2/${group.replace(/\./g, "/")}/${artifact}/${version}/${artifact}-${version}.pom`;
+            const parseTag = (xml, tag) => {
+              const m = xml.match(new RegExp(`<${tag}>\\s*([^<]+?)\\s*</${tag}>`));
+              return m ? m[1].trim() : null;
+            };
+            const parseProperties = (xml) => {
+              const props = {};
+              const propsMatch = xml.match(/<properties>([\s\S]*?)<\/properties>/);
+              if (!propsMatch) return props;
+              const block = propsMatch[1];
+              const re = /<([a-zA-Z0-9_.-]+)>\s*([^<]+?)\s*<\/\1>/g;
+              let m;
+              while ((m = re.exec(block)) !== null) {
+                props[m[1]] = m[2].trim();
+              }
+              return props;
+            };
+            const resolvePropertyRef = (v, props) => {
+              if (!v) return null;
+              const pm = v.match(/^\$\{(.+)\}$/);
+              if (!pm) return v;
+              return props[pm[1]] || null;
+            };
+            const parsePomCompanions = (xml, baseGroup, baseArtifact) => {
+              const props = parseProperties(xml);
+              const companions = [];
+              const depRegex = /<dependency>([\s\S]*?)<\/dependency>/g;
+              let m;
+              while ((m = depRegex.exec(xml)) !== null) {
+                const block = m[1];
+                const g = parseTag(block, "groupId");
+                const a = parseTag(block, "artifactId");
+                const scope = parseTag(block, "scope");
+                const optional = parseTag(block, "optional");
+                let v = parseTag(block, "version");
+                v = resolvePropertyRef(v, props);
+                if (!g || !a) continue;
+                if (g !== baseGroup || a === baseArtifact) continue;
+                if (!v) continue;
+                if (scope && ["test", "provided"].includes(scope)) continue;
+                if (optional && optional.toLowerCase() == "true") continue;
+                companions.push([`${g}:${a}`, v]);
+              }
+              return companions;
+            };
+            const getPomCompanions = async (pkg, version) => {
+              const [group, artifact] = pkg.split(":");
+              if (!group || !artifact || !version) return [];
+              const key = `${pkg}@${version}`;
+              if (pomCache.has(key)) return pomCache.get(key);
+              try {
+                const response = await fetch(mavenPomUrl(group, artifact, version));
+                if (!response.ok) {
+                  pomCache.set(key, []);
+                  return [];
+                }
+                const xml = await response.text();
+                const companions = parsePomCompanions(xml, group, artifact);
+                pomCache.set(key, companions);
+                return companions;
+              } catch (_err) {
+                pomCache.set(key, []);
+                return [];
+              }
+            };
+
+            const classpathOverrideMap = new Map(classpathOverrides.map(([pkg, v]) => [pkg, v]));
+            for (const [pkg, fixedVersion] of [...classpathOverrideMap.entries()]) {
+              const pomCompanions = await getPomCompanions(pkg, fixedVersion);
+              for (const [companionPkg, companionVersionFromPom] of pomCompanions) {
+                if (!classpathOverrideMap.has(companionPkg)) {
+                  const companionVersion = targetByPackage.get(companionPkg) || companionVersionFromPom;
+                  classpathOverrideMap.set(companionPkg, companionVersion);
+                  updates.push(
+                    `${companionPkg} -> ${companionVersion} (managed buildscript metadata companion override)`
+                  );
+                }
+              }
+            }
+
             // Companion classpath rules: some plugin-classpath fixes require aligned pairs.
             const classpathCompanions = new Map([
               ["org.apache.commons:commons-compress", [["org.apache.commons:commons-lang3", "3.18.0"]]],
               ["org.apache.commons:commons-lang3", [["org.apache.commons:commons-compress", "1.26.0"]]],
             ]);
-            const classpathOverrideMap = new Map(classpathOverrides.map(([pkg, v]) => [pkg, v]));
-            for (const [pkg] of classpathOverrides) {
+            for (const [pkg] of classpathOverrideMap.entries()) {
               const companions = classpathCompanions.get(pkg) || [];
               for (const [companionPkg, defaultVersion] of companions) {
                 if (!classpathOverrideMap.has(companionPkg)) {
