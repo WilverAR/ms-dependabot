@@ -28,6 +28,8 @@ repositories {
 	mavenCentral()
 }
 
+ext['artemis.version'] = '2.40.0'
+
 dependencyManagement {
 	imports {
 		mavenBom 'io.netty:netty-bom:4.1.129.Final'
