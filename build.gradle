@@ -1,18 +1,12 @@
 // dependabot-auto-fix:buildscript-classpath-overrides:start
 buildscript {
-	configurations.classpath {
-		resolutionStrategy.eachDependency { details ->
-			if (details.requested.group == 'org.apache.activemq' && details.requested.name == 'artemis-project') {
-				details.useVersion('2.40.0')
-			}
-			if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-compress') {
-				details.useVersion('1.26.0')
-			}
-			if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-lang3') {
-				details.useVersion('3.18.0')
-			}
-		}
-	}
+  configurations.classpath {
+    resolutionStrategy.eachDependency { details ->
+      if (details.requested.group == 'org.apache.activemq' && details.requested.name == 'artemis-project') {
+        details.useVersion('2.40.0')
+      }
+    }
+  }
 }
 // dependabot-auto-fix:buildscript-classpath-overrides:end
 plugins {
