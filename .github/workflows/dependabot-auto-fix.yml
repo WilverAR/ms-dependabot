@@ -23,7 +23,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -589,6 +590,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
+          base: ${{ github.ref_name }}
           commit-message: "chore: apply dependabot auto-fix updates"
           title: "chore: apply dependabot auto-fix updates"
           body: |
