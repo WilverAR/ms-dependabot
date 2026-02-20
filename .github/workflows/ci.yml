@@ -35,4 +35,3 @@ jobs:
       - name: Spring Boot run (smoke)
         run: |
           timeout 60 ./gradlew bootRun || true
-
