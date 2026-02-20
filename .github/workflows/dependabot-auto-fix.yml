@@ -461,15 +461,10 @@ jobs:
             const esc = (v) => String(v).replace(/'/g, "\\'");
             const renderBuildscriptOverrides = (items) => {
               if (!items.length) return "";
-              const rules = items
+              const forces = items
                 .sort((a, b) => a[0].localeCompare(b[0]))
                 .map(([pkg, fixedVersion]) => {
-                  const [group, artifact] = pkg.split(":");
-                  return [
-                    `      if (details.requested.group == '${esc(group)}' && details.requested.name == '${esc(artifact)}') {`,
-                    `        details.useVersion('${esc(fixedVersion)}')`,
-                    "      }",
-                  ].join("\n");
+                  return `      force '${esc(pkg)}:${esc(fixedVersion)}'`;
                 })
                 .join("\n");
 
@@ -477,8 +472,8 @@ jobs:
                 buildscriptMarkerStart,
                 "buildscript {",
                 "  configurations.classpath {",
-                "    resolutionStrategy.eachDependency { details ->",
-                rules,
+                "    resolutionStrategy {",
+                forces,
                 "    }",
                 "  }",
                 "}",
@@ -546,7 +541,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
 
       - name: Download auto-fix results artifact
         uses: actions/download-artifact@v4
