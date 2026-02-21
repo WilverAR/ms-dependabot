@@ -1,11 +1,11 @@
 name: Dependabot Auto Fix
 
 on:
-  # Manual trigger to avoid racing Dependabot indexing.
   workflow_dispatch:
+  schedule:
+    - cron: '30 6 * * *'
 
 concurrency:
-  # Prevent overlapping runs for the same branch/ref.
   group: dependabot-auto-fix-${{ github.ref }}
   cancel-in-progress: true
 
@@ -14,11 +14,12 @@ permissions:
   security-events: read
 
 jobs:
-  # Job 1: snapshot dependencies and collect open Dependabot alerts.
   dependabot-analyze:
     name: Analyze Alerts
     runs-on: ubuntu-latest
-    permissions: write-all
+    permissions:
+      contents: read
+      security-events: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,8 +30,8 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          distribution: temurin
+          java-version: '17'
 
       - name: Submit dependency snapshot (Gradle)
         uses: gradle/actions/dependency-submission@v5
@@ -40,24 +41,19 @@ jobs:
         with:
           github-token: ${{ secrets.RENOVATE_TOKEN }}
           script: |
-            const fs = require("fs");
+            const fs = require('fs');
 
-            // Read all open alerts using the explicit Dependabot REST endpoint route.
-            // This endpoint does not support `page`; follow pagination via Link headers.
             const alerts = [];
-            let requestUrl =
-              `GET /repos/${context.repo.owner}/${context.repo.repo}/dependabot/alerts?state=open&per_page=100`;
+            let requestUrl = `GET /repos/${context.repo.owner}/${context.repo.repo}/dependabot/alerts?state=open&per_page=100`;
 
             const extractNextUrl = (linkHeader) => {
               if (!linkHeader) return null;
-              const parts = linkHeader.split(",");
-              for (const part of parts) {
+              for (const part of linkHeader.split(',')) {
                 const section = part.trim();
-                if (section.includes('rel="next"')) {
-                  const start = section.indexOf("<");
-                  const end = section.indexOf(">");
-                  if (start >= 0 && end > start) return section.slice(start + 1, end);
-                }
+                if (!section.includes('rel="next"')) continue;
+                const start = section.indexOf('<');
+                const end = section.indexOf('>');
+                if (start >= 0 && end > start) return section.slice(start + 1, end);
               }
               return null;
             };
@@ -68,25 +64,22 @@ jobs:
               requestUrl = extractNextUrl(response.headers.link);
             }
 
-            // Keep only fields used by the remediation logic.
             const mapped = alerts.map((alert) => {
               const vuln = alert.security_vulnerability || {};
               const pkg = vuln.package || {};
               const patched = vuln.first_patched_version || {};
-              const advisory = alert.security_advisory || {};
               return {
                 alert_number: alert.number,
                 ecosystem: pkg.ecosystem || null,
                 name: pkg.name || null,
                 fixed_version: patched.identifier || null,
+                severity: alert.security_advisory?.severity || null,
                 manifest_path: alert.dependency?.manifest_path || null,
-                severity: advisory.severity || null,
               };
             });
 
-            // Store normalized alerts as artifact for the next job.
-            fs.writeFileSync("dependabot-alerts.json", JSON.stringify(mapped, null, 2));
-            core.info(`Alerts written: ${mapped.length}`);
+            fs.writeFileSync('dependabot-alerts.json', JSON.stringify(mapped, null, 2));
+            core.info(`Alerts captured: ${mapped.length}`);
 
       - name: Upload alerts artifact
         uses: actions/upload-artifact@v4
@@ -94,25 +87,29 @@ jobs:
           name: dependabot-alerts-json-${{ github.run_id }}
           path: dependabot-alerts.json
 
-  # Job 2: apply fixes to build.gradle and validate build safety.
   dependabot-auto-fix:
     name: Apply Fixes
     needs: dependabot-analyze
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      changed: ${{ steps.engine.outputs.changed }}
+      clean: ${{ steps.engine.outputs.clean }}
+      strategy: ${{ steps.engine.outputs.strategy }}
+      status: ${{ steps.engine.outputs.status }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      - name: Print run revision
-        run: |
-          # Traceability: confirm run SHA equals checked-out HEAD.
-          echo "workflow ref: ${{ github.ref }}"
-          echo "workflow sha: ${{ github.sha }}"
-          git rev-parse HEAD
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
 
       - name: Download alerts artifact
         uses: actions/download-artifact@v4
@@ -120,40 +117,22 @@ jobs:
           name: dependabot-alerts-json-${{ github.run_id }}
           path: .
 
-      - name: Apply vulnerability fixes into build.gradle
+      - name: Execute remediation engine
+        id: engine
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.RENOVATE_TOKEN }}
           script: |
-            const fs = require("fs");
+            const fs = require('fs');
+            const { execSync } = require('child_process');
 
-            // Input artifact and target file.
-            const alertsPath = "dependabot-alerts.json";
-            const buildFile = "build.gradle";
+            const alertsPath = 'dependabot-alerts.json';
+            const buildFile = 'build.gradle';
+            const summaryLines = [];
+            const changes = [];
 
-            if (!fs.existsSync(alertsPath)) {
-              core.setFailed("dependabot-alerts.json was not found.");
-              return;
-            }
-
-            // Only Maven alerts with an available fixed version are actionable.
-            const alerts = JSON.parse(fs.readFileSync(alertsPath, "utf8"));
-            const mavenAlerts = alerts.filter(
-              (a) => a?.ecosystem === "maven" && a?.name && a?.fixed_version
-            );
-
-            if (!mavenAlerts.length) {
-              core.info("No maven alerts with fixed versions. Nothing to remediate.");
-              return;
-            }
-
-            // Helpers to compare semantic-like versions and to escape regex input.
-            const escapeRegex = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-            const tokenize = (v) =>
-              String(v)
-                .split(/[\.-]/)
-                .map((p) => (/^\d+$/.test(p) ? Number(p) : p.toLowerCase()));
-
+            const isStable = (v) => /^\d+\.\d+\.\d+$/.test(String(v || '').trim());
+            const tokenize = (v) => String(v).split(/[.-]/).map((p) => (/^\d+$/.test(p) ? Number(p) : p.toLowerCase()));
             const compareVersions = (a, b) => {
               const ta = tokenize(a);
               const tb = tokenize(b);
@@ -162,91 +141,41 @@ jobs:
                 const va = ta[i] ?? 0;
                 const vb = tb[i] ?? 0;
                 if (va === vb) continue;
-                if (typeof va === "number" && typeof vb === "number") return va - vb;
+                if (typeof va === 'number' && typeof vb === 'number') return va - vb;
                 return String(va).localeCompare(String(vb));
               }
               return 0;
             };
+            const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            // Choose the highest fixed version per package from all alert entries.
-            // Also keep minimal metadata to infer whether fallback should target plugin classpath.
-            const targetByPackage = new Map();
-            const packageMeta = new Map();
-            for (const alert of mavenAlerts) {
-              const current = targetByPackage.get(alert.name);
-              if (!current || compareVersions(alert.fixed_version, current) > 0) {
-                targetByPackage.set(alert.name, alert.fixed_version);
-              }
-              const meta = packageMeta.get(alert.name) || { manifestPaths: new Set() };
-              if (alert.manifest_path) {
-                meta.manifestPaths.add(String(alert.manifest_path).toLowerCase());
-              }
-              packageMeta.set(alert.name, meta);
-            }
-            // Keep critical families aligned to avoid runtime API mismatches.
-            if (targetByPackage.has("ch.qos.logback:logback-core")) {
-              const v = targetByPackage.get("ch.qos.logback:logback-core");
-              const cur = targetByPackage.get("ch.qos.logback:logback-classic");
-              if (!cur || compareVersions(v, cur) > 0) {
-                targetByPackage.set("ch.qos.logback:logback-classic", v);
-              }
-            }
-            if (targetByPackage.has("ch.qos.logback:logback-classic")) {
-              const v = targetByPackage.get("ch.qos.logback:logback-classic");
-              const cur = targetByPackage.get("ch.qos.logback:logback-core");
-              if (!cur || compareVersions(v, cur) > 0) {
-                targetByPackage.set("ch.qos.logback:logback-core", v);
-              }
-            }
+            const parseGA = (name) => {
+              const parts = String(name || '').split(':');
+              if (parts.length < 2) return null;
+              return `${parts[0]}:${parts[1]}`;
+            };
 
-            if (!fs.existsSync(buildFile)) {
-              core.setFailed("build.gradle was not found.");
-              return;
-            }
+            const parseBootVersion = (content) => {
+              const m = content.match(/id\s+['"]org\.springframework\.boot['"]\s+version\s+['"]([^'"]+)['"]/);
+              return m ? m[1].trim() : null;
+            };
 
-            // Apply in-place updates for already-declared dependencies.
-            let content = fs.readFileSync(buildFile, "utf8");
-            const updates = [];
-            const missingPackages = [];
+            const setBootVersion = (content, nextVersion) =>
+              content.replace(
+                /(id\s+['"]org\.springframework\.boot['"]\s+version\s+['"])([^'"]+)(['"])/,
+                `$1${nextVersion}$3`
+              );
 
-            for (const [pkg, fixedVersion] of targetByPackage.entries()) {
-              const refRegex = new RegExp(`(['"])${escapeRegex(pkg)}:[^'"]+\\1`, "g");
-              const replacement = `'${pkg}:${fixedVersion}'`;
-              if (refRegex.test(content)) {
-                content = content.replace(refRegex, replacement);
-                updates.push(`${pkg} -> ${fixedVersion} (updated existing reference)`);
-              } else {
-                missingPackages.push([pkg, fixedVersion]);
-              }
-            }
-
-            // Utilities to find top-level and nested Gradle blocks by text parsing.
             const findBlockRange = (src, regex, useLast = false) => {
               const matches = [...src.matchAll(regex)];
               if (!matches.length) return null;
               const start = useLast ? matches[matches.length - 1].index : matches[0].index;
-              const open = src.indexOf("{", start);
+              const open = src.indexOf('{', start);
               if (open < 0) return null;
               let depth = 0;
               for (let i = open; i < src.length; i++) {
                 const ch = src[i];
-                if (ch === "{") depth++;
-                if (ch === "}") {
-                  depth--;
-                  if (depth === 0) return { start, open, end: i };
-                }
-              }
-              return null;
-            };
-
-            const findBlockFromStart = (src, start) => {
-              const open = src.indexOf("{", start);
-              if (open < 0) return null;
-              let depth = 0;
-              for (let i = open; i < src.length; i++) {
-                const ch = src[i];
-                if (ch === "{") depth++;
-                if (ch === "}") {
+                if (ch === '{') depth++;
+                if (ch === '}') {
                   depth--;
                   if (depth === 0) return { start, open, end: i };
                 }
@@ -256,250 +185,417 @@ jobs:
 
             const findBlockInside = (src, outerRange, regex, useLast = false) => {
               if (!outerRange) return null;
-              const innerSource = src.slice(outerRange.start, outerRange.end + 1);
-              const matches = [...innerSource.matchAll(regex)];
+              const inner = src.slice(outerRange.start, outerRange.end + 1);
+              const matches = [...inner.matchAll(regex)];
               if (!matches.length) return null;
-              const innerStart =
-                outerRange.start + (useLast ? matches[matches.length - 1].index : matches[0].index);
-              const open = src.indexOf("{", innerStart);
+              const start = outerRange.start + (useLast ? matches[matches.length - 1].index : matches[0].index);
+              const open = src.indexOf('{', start);
               if (open < 0 || open > outerRange.end) return null;
               let depth = 0;
               for (let i = open; i <= outerRange.end; i++) {
                 const ch = src[i];
-                if (ch === "{") depth++;
-                if (ch === "}") {
+                if (ch === '{') depth++;
+                if (ch === '}') {
                   depth--;
-                  if (depth === 0) return { start: innerStart, open, end: i };
+                  if (depth === 0) return { start, open, end: i };
                 }
               }
               return null;
             };
 
-            const depMgmtRange = findBlockRange(content, /dependencyManagement\s*\{/g);
-            const depMgmtImportsRange = findBlockInside(content, depMgmtRange, /imports\s*\{/g);
-            const depMgmtDepsRange = findBlockInside(content, depMgmtRange, /dependencies\s*\{/g, true);
+            const upsertDependencyManagement = (content, entries) => {
+              if (!entries.length) return content;
+              let out = content;
 
-            const depMatches = [...content.matchAll(/dependencies\s*\{/g)];
-            if (!depMatches.length) {
-              core.setFailed("No dependencies block found in build.gradle.");
-              return;
-            }
-            const mainDepCandidates = depMatches.filter((m) => {
-              if (!depMgmtRange) return true;
-              return m.index < depMgmtRange.start || m.index > depMgmtRange.end;
-            });
-            const mainDepMatch =
-              mainDepCandidates.length > 0
-                ? mainDepCandidates[mainDepCandidates.length - 1]
-                : depMatches[depMatches.length - 1];
-            const mainDepsRange = mainDepMatch ? findBlockFromStart(content, mainDepMatch.index) : null;
+              const renderLine = ([ga, version]) => `\t\tdependency '${ga}:${version}'`;
 
-            if (missingPackages.length && !mainDepsRange && !depMgmtDepsRange && !depMgmtImportsRange) {
-              core.setFailed("No suitable block found to insert missing dependency fixes.");
-              return;
-            }
-
-            // Prepare insertion lines for packages not currently declared.
-            const importLines = [];
-            const depMgmtDepLines = [];
-            const mainDepLines = [];
-
-            for (const [pkg, fixedVersion] of missingPackages) {
-              const artifact = pkg.split(":")[1] || "";
-              const isBom = /(^|-)bom$/i.test(artifact);
-              if (isBom && depMgmtImportsRange) {
-                importLines.push(`\t\tmavenBom '${pkg}:${fixedVersion}'`);
-                updates.push(`${pkg} -> ${fixedVersion} (added to dependencyManagement.imports)`);
-              } else if (depMgmtDepsRange) {
-                depMgmtDepLines.push(`\t\tdependency '${pkg}:${fixedVersion}'`);
-                updates.push(`${pkg} -> ${fixedVersion} (added to dependencyManagement.dependencies)`);
-              } else if (mainDepsRange) {
-                mainDepLines.push(`\timplementation '${pkg}:${fixedVersion}'`);
-                updates.push(`${pkg} -> ${fixedVersion} (added to dependencies)`);
-              }
-            }
-
-            // Insert from the end of file backwards to keep indexes stable.
-            const insertions = [];
-            if (depMgmtImportsRange && importLines.length) {
-              insertions.push({ idx: depMgmtImportsRange.end, text: `\n${importLines.join("\n")}\n` });
-            }
-            if (depMgmtDepsRange && depMgmtDepLines.length) {
-              insertions.push({ idx: depMgmtDepsRange.end, text: `\n${depMgmtDepLines.join("\n")}\n` });
-            }
-            if (mainDepsRange && mainDepLines.length) {
-              insertions.push({ idx: mainDepsRange.end, text: `\n${mainDepLines.join("\n")}\n` });
-            }
-
-            insertions
-              .sort((a, b) => b.idx - a.idx)
-              .forEach((entry) => {
-                content = content.slice(0, entry.idx) + entry.text + content.slice(entry.idx);
-              });
-
-            // Dynamic fallback for plugin/classpath vulnerabilities:
-            // If alert source is settings.gradle and dependency still requires explicit classpath pinning,
-            // maintain a managed buildscript resolution block.
-            const classpathOverrides = [];
-            for (const [pkg, fixedVersion] of targetByPackage.entries()) {
-              const [group, artifact] = pkg.split(":");
-              const isBom = /(^|-)bom$/i.test(artifact || "");
-              const manifests = packageMeta.get(pkg)?.manifestPaths || new Set();
-              const fromSettings = manifests.has("settings.gradle");
-              if (fromSettings && !isBom && group && artifact) {
-                classpathOverrides.push([pkg, fixedVersion]);
-              }
-            }
-
-            // Resolve companion dependencies from Maven metadata (POM) to avoid hardcoded pairs only.
-            const pomCache = new Map();
-            const mavenPomUrl = (group, artifact, version) =>
-              `https://repo1.maven.org/maven2/${group.replace(/\./g, "/")}/${artifact}/${version}/${artifact}-${version}.pom`;
-            const parseTag = (xml, tag) => {
-              const m = xml.match(new RegExp(`<${tag}>\\s*([^<]+?)\\s*</${tag}>`));
-              return m ? m[1].trim() : null;
-            };
-            const parseProperties = (xml) => {
-              const props = {};
-              const propsMatch = xml.match(/<properties>([\s\S]*?)<\/properties>/);
-              if (!propsMatch) return props;
-              const block = propsMatch[1];
-              const re = /<([a-zA-Z0-9_.-]+)>\s*([^<]+?)\s*<\/\1>/g;
-              let m;
-              while ((m = re.exec(block)) !== null) {
-                props[m[1]] = m[2].trim();
-              }
-              return props;
-            };
-            const resolvePropertyRef = (v, props) => {
-              if (!v) return null;
-              const pm = v.match(/^\$\{(.+)\}$/);
-              if (!pm) return v;
-              return props[pm[1]] || null;
-            };
-            const parsePomCompanions = (xml, baseGroup, baseArtifact) => {
-              const props = parseProperties(xml);
-              const companions = [];
-              const depRegex = /<dependency>([\s\S]*?)<\/dependency>/g;
-              let m;
-              while ((m = depRegex.exec(xml)) !== null) {
-                const block = m[1];
-                const g = parseTag(block, "groupId");
-                const a = parseTag(block, "artifactId");
-                const scope = parseTag(block, "scope");
-                const optional = parseTag(block, "optional");
-                let v = parseTag(block, "version");
-                v = resolvePropertyRef(v, props);
-                if (!g || !a) continue;
-                if (g !== baseGroup || a === baseArtifact) continue;
-                if (!v) continue;
-                if (scope && ["test", "provided"].includes(scope)) continue;
-                if (optional && optional.toLowerCase() == "true") continue;
-                companions.push([`${g}:${a}`, v]);
-              }
-              return companions;
-            };
-            const getPomCompanions = async (pkg, version) => {
-              const [group, artifact] = pkg.split(":");
-              if (!group || !artifact || !version) return [];
-              const key = `${pkg}@${version}`;
-              if (pomCache.has(key)) return pomCache.get(key);
-              try {
-                const response = await fetch(mavenPomUrl(group, artifact, version));
-                if (!response.ok) {
-                  pomCache.set(key, []);
-                  return [];
+              let depMgmtRange = findBlockRange(out, /dependencyManagement\s*\{/g, true);
+              if (!depMgmtRange) {
+                const block = [
+                  '',
+                  'dependencyManagement {',
+                  '\tdependencies {',
+                  ...entries.map(renderLine),
+                  '\t}',
+                  '}',
+                  '',
+                ].join('\n');
+                const depsMatch = out.match(/\ndependencies\s*\{/);
+                if (depsMatch && typeof depsMatch.index === 'number') {
+                  out = out.slice(0, depsMatch.index) + block + out.slice(depsMatch.index);
+                } else {
+                  out = `${out.trimEnd()}\n${block}`;
                 }
+                return out;
+              }
+
+              let depsRange = findBlockInside(out, depMgmtRange, /dependencies\s*\{/g, true);
+              if (!depsRange) {
+                const insert = `\n\tdependencies {\n${entries.map(renderLine).join('\n')}\n\t}\n`;
+                out = out.slice(0, depMgmtRange.end) + insert + out.slice(depMgmtRange.end);
+                return out;
+              }
+
+              const toInsert = [];
+              for (const [ga, version] of entries) {
+                const lineRegex = new RegExp(`dependency\\s+['\"]${escapeRegex(ga)}:[^'\"]+['\"]`);
+                if (!lineRegex.test(out)) toInsert.push(renderLine([ga, version]));
+              }
+              if (!toInsert.length) return out;
+
+              const insert = `\n${toInsert.join('\n')}\n`;
+              out = out.slice(0, depsRange.end) + insert + out.slice(depsRange.end);
+              return out;
+            };
+
+            const upsertForceOverrides = (content, entries) => {
+              if (!entries.length) return content;
+              let out = content;
+
+              out = out.replace(/resolutionStrategy\.eachDependency\s*\{[\s\S]*?\n\s*\}\s*/g, '');
+
+              const buildscriptRange = findBlockRange(out, /buildscript\s*\{/g, true);
+              if (!buildscriptRange) {
+                const forces = entries
+                  .map(([ga, version]) => `      force '${ga}:${version}'`)
+                  .join('\n');
+                const block = [
+                  'buildscript {',
+                  '  configurations.classpath {',
+                  '    resolutionStrategy {',
+                  forces,
+                  '    }',
+                  '  }',
+                  '}',
+                  '',
+                ].join('\n');
+                return `${block}${out}`;
+              }
+
+              let classpathRange = findBlockInside(out, buildscriptRange, /configurations\.classpath\s*\{/g, true);
+              if (!classpathRange) {
+                const insert = [
+                  '',
+                  '  configurations.classpath {',
+                  '    resolutionStrategy {',
+                  ...entries.map(([ga, version]) => `      force '${ga}:${version}'`),
+                  '    }',
+                  '  }',
+                  '',
+                ].join('\n');
+                out = out.slice(0, buildscriptRange.end) + insert + out.slice(buildscriptRange.end);
+                return out;
+              }
+
+              let resolutionRange = findBlockInside(out, classpathRange, /resolutionStrategy\s*\{/g, true);
+              if (!resolutionRange) {
+                const insert = [
+                  '',
+                  '    resolutionStrategy {',
+                  ...entries.map(([ga, version]) => `      force '${ga}:${version}'`),
+                  '    }',
+                  '',
+                ].join('\n');
+                out = out.slice(0, classpathRange.end) + insert + out.slice(classpathRange.end);
+                return out;
+              }
+
+              const addLines = [];
+              for (const [ga, version] of entries) {
+                const forceRegex = new RegExp(`force\\s+['\"]${escapeRegex(ga)}:[^'\"]+['\"]`);
+                if (!forceRegex.test(out)) addLines.push(`      force '${ga}:${version}'`);
+              }
+              if (!addLines.length) return out;
+
+              const insert = `\n${addLines.join('\n')}\n`;
+              out = out.slice(0, resolutionRange.end) + insert + out.slice(resolutionRange.end);
+              return out;
+            };
+
+            const removeOverridePackage = (content, ga) => {
+              const depRegex = new RegExp(`^\\s*dependency\\s+['\"]${escapeRegex(ga)}:[^'\"]+['\"]\\s*\\n?`, 'gm');
+              const forceRegex = new RegExp(`^\\s*force\\s+['\"]${escapeRegex(ga)}:[^'\"]+['\"]\\s*\\n?`, 'gm');
+              return content.replace(depRegex, '').replace(forceRegex, '');
+            };
+
+            const extractOverridePackages = (content) => {
+              const out = new Set();
+              for (const m of content.matchAll(/dependency\s+['"]([^:'"]+:[^:'"]+):[^'"]+['"]/g)) out.add(m[1]);
+              for (const m of content.matchAll(/force\s+['"]([^:'"]+:[^:'"]+):[^'"]+['"]/g)) out.add(m[1]);
+              return [...out];
+            };
+
+            const applyDirectUpgrades = (content, targetByPackage) => {
+              let out = content;
+              const applied = [];
+              for (const [ga, version] of targetByPackage.entries()) {
+                const refRegex = new RegExp(`(['\"])${escapeRegex(ga)}:[^'\"]+\\1`, 'g');
+                if (refRegex.test(out)) {
+                  out = out.replace(refRegex, `'${ga}:${version}'`);
+                  applied.push([ga, version]);
+                }
+              }
+              return { content: out, applied };
+            };
+
+            const packageDeclared = (content, ga) => {
+              const refRegex = new RegExp(`['\"]${escapeRegex(ga)}:[^'\"]+['\"]`);
+              return refRegex.test(content);
+            };
+
+            const parseVulnerableCount = () => {
+              const report = 'build/reports/dependency-check-report.html';
+              if (!fs.existsSync(report)) return Number.POSITIVE_INFINITY;
+              const html = fs.readFileSync(report, 'utf8');
+              return (html.match(/subsectionheader standardsubsection vulnerable/g) || []).length;
+            };
+
+            const runValidation = () => {
+              try {
+                execSync('chmod +x ./gradlew', { stdio: 'inherit' });
+                execSync('./gradlew clean build', { stdio: 'inherit' });
+                execSync('./gradlew test', { stdio: 'inherit' });
+                execSync('./gradlew dependencyCheckAnalyze', { stdio: 'inherit' });
+                const vulnerableCount = parseVulnerableCount();
+                return { ok: true, clean: vulnerableCount === 0, vulnerableCount };
+              } catch (error) {
+                return { ok: false, clean: false, vulnerableCount: Number.POSITIVE_INFINITY, error: String(error.message || error) };
+              }
+            };
+
+            const fetchBootCandidates = async (current) => {
+              if (!isStable(current)) return [];
+              const [major, minor, patch] = current.split('.').map(Number);
+              const url = 'https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-gradle-plugin/maven-metadata.xml';
+              try {
+                const response = await fetch(url);
+                if (!response.ok) return [];
                 const xml = await response.text();
-                const companions = parsePomCompanions(xml, group, artifact);
-                pomCache.set(key, companions);
-                return companions;
-              } catch (_err) {
-                pomCache.set(key, []);
+                const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
+                  .map((m) => m[1].trim())
+                  .filter(isStable)
+                  .sort(compareVersions);
+
+                const patchCandidates = versions.filter((v) => {
+                  const [ma, mi, pa] = v.split('.').map(Number);
+                  return ma === major && mi === minor && pa > patch;
+                });
+                const minorCandidates = versions.filter((v) => {
+                  const [ma, mi] = v.split('.').map(Number);
+                  return ma === major && mi > minor;
+                });
+
+                const out = [];
+                if (patchCandidates.length) out.push({ type: 'boot-patch', version: patchCandidates[patchCandidates.length - 1] });
+                if (minorCandidates.length) out.push({ type: 'boot-minor', version: minorCandidates[minorCandidates.length - 1] });
+                return out;
+              } catch (_e) {
                 return [];
               }
             };
 
-            const classpathOverrideMap = new Map(classpathOverrides.map(([pkg, v]) => [pkg, v]));
-            const upsertHigher = (pkg, candidateVersion, reasonLabel) => {
-              if (!candidateVersion) return;
-              const currentVersion = classpathOverrideMap.get(pkg);
-              if (!currentVersion || compareVersions(candidateVersion, currentVersion) > 0) {
-                classpathOverrideMap.set(pkg, candidateVersion);
-                updates.push(`${pkg} -> ${candidateVersion} (${reasonLabel})`);
+            if (!fs.existsSync(alertsPath)) {
+              core.setFailed('dependabot-alerts.json was not found.');
+              return;
+            }
+            if (!fs.existsSync(buildFile)) {
+              core.setFailed('build.gradle was not found.');
+              return;
+            }
+
+            const rawAlerts = JSON.parse(fs.readFileSync(alertsPath, 'utf8'));
+            const mavenAlerts = rawAlerts
+              .filter((a) => a?.ecosystem === 'maven' && a?.name && a?.fixed_version)
+              .map((a) => ({ ...a, ga: parseGA(a.name) }))
+              .filter((a) => a.ga && isStable(a.fixed_version));
+
+            if (!mavenAlerts.length) {
+              fs.writeFileSync('remediation-summary.txt', 'No actionable Maven alerts with stable fixed versions.\n', 'utf8');
+              fs.writeFileSync('remediation-state.json', JSON.stringify({ status: 'no-alerts', changed: false, clean: true, strategy: 'none' }, null, 2));
+              core.setOutput('status', 'no-alerts');
+              core.setOutput('changed', 'false');
+              core.setOutput('clean', 'true');
+              core.setOutput('strategy', 'none');
+              return;
+            }
+
+            const targetByPackage = new Map();
+            for (const alert of mavenAlerts) {
+              const current = targetByPackage.get(alert.ga);
+              if (!current || compareVersions(alert.fixed_version, current) > 0) {
+                targetByPackage.set(alert.ga, alert.fixed_version);
               }
+            }
+
+            const originalContent = fs.readFileSync(buildFile, 'utf8');
+            let workingContent = originalContent;
+            let selectedStrategy = 'none';
+            let clean = false;
+
+            const springPrefixes = [
+              'org.springframework',
+              'ch.qos.logback',
+              'com.fasterxml.jackson',
+              'org.apache.tomcat',
+              'org.hibernate',
+              'io.netty',
+              'io.micrometer',
+              'org.yaml.snakeyaml',
+              'com.h2database',
+              'org.postgresql',
+              'com.mysql',
+              'org.mariadb',
+              'com.zaxxer.hikari',
+              'org.slf4j',
+              'jakarta.validation',
+              'jakarta.servlet',
+              'jakarta.persistence',
+              'org.assertj',
+            ];
+
+            const hasSpringManagedAlerts = [...targetByPackage.keys()].some((ga) => {
+              const group = ga.split(':')[0];
+              return springPrefixes.some((p) => group === p || group.startsWith(`${p}.`));
+            });
+
+            const bootVersion = parseBootVersion(workingContent);
+            const bootAware = Boolean(bootVersion);
+
+            const tryCandidate = (label, nextContent, strategyTag) => {
+              if (nextContent === workingContent) {
+                summaryLines.push(`${label}: no changes to apply.`);
+                return { accepted: false, clean: false };
+              }
+              fs.writeFileSync(buildFile, nextContent, 'utf8');
+              summaryLines.push(`${label}: validating...`);
+              const result = runValidation();
+              if (!result.ok) {
+                summaryLines.push(`${label}: build/test/dependencyCheck failed.`);
+                fs.writeFileSync(buildFile, workingContent, 'utf8');
+                return { accepted: false, clean: false };
+              }
+
+              summaryLines.push(`${label}: validation OK, vulnerable_items=${result.vulnerableCount}`);
+              workingContent = nextContent;
+              selectedStrategy = strategyTag;
+
+              if (result.clean) {
+                clean = true;
+                summaryLines.push(`${label}: dependencyCheck clean.`);
+                return { accepted: true, clean: true };
+              }
+
+              return { accepted: true, clean: false };
             };
-            for (const [pkg, fixedVersion] of [...classpathOverrideMap.entries()]) {
-              const pomCompanions = await getPomCompanions(pkg, fixedVersion);
-              for (const [companionPkg, companionVersionFromPom] of pomCompanions) {
-                const companionVersion = targetByPackage.get(companionPkg) || companionVersionFromPom;
-                upsertHigher(
-                  companionPkg,
-                  companionVersion,
-                  "managed buildscript metadata companion override"
+
+            if (bootAware && hasSpringManagedAlerts) {
+              const bootCandidates = await fetchBootCandidates(bootVersion);
+              for (const candidate of bootCandidates) {
+                const next = setBootVersion(workingContent, candidate.version);
+                const tried = tryCandidate(
+                  `Phase 3 (${candidate.type}) Spring Boot ${bootVersion} -> ${candidate.version}`,
+                  next,
+                  candidate.type
                 );
+                if (tried.accepted) {
+                  changes.push(`Spring Boot: ${bootVersion} -> ${candidate.version} (${candidate.type})`);
+                }
+                if (tried.clean) break;
+              }
+            } else {
+              summaryLines.push('Phase 3 skipped: project is not Spring Boot aware or no managed-family alerts found.');
+            }
+
+            if (!clean) {
+              const direct = applyDirectUpgrades(workingContent, targetByPackage);
+              if (direct.applied.length) {
+                const tried = tryCandidate('Phase 4 (direct upgrades)', direct.content, 'direct-upgrade');
+                if (tried.accepted) {
+                  for (const [ga, version] of direct.applied) changes.push(`Direct: ${ga} -> ${version}`);
+                }
+              } else {
+                summaryLines.push('Phase 4 skipped: no explicit dependency declarations to update.');
               }
             }
 
-            // Companion classpath rules: some plugin-classpath fixes require aligned pairs.
-            const classpathCompanions = new Map([
-              ["org.apache.commons:commons-compress", [["org.apache.commons:commons-lang3", "3.18.0"]]],
-              ["org.apache.commons:commons-lang3", [["org.apache.commons:commons-compress", "1.26.0"]]],
-            ]);
-            for (const [pkg] of classpathOverrideMap.entries()) {
-              const companions = classpathCompanions.get(pkg) || [];
-              for (const [companionPkg, defaultVersion] of companions) {
-                const companionVersion = targetByPackage.get(companionPkg) || defaultVersion;
-                upsertHigher(companionPkg, companionVersion, "managed buildscript companion override");
+            if (!clean) {
+              const missing = [...targetByPackage.entries()].filter(([ga]) => !packageDeclared(workingContent, ga));
+              if (missing.length) {
+                const next = upsertDependencyManagement(workingContent, missing);
+                const tried = tryCandidate('Phase 5A (dependencyManagement overrides)', next, 'dependency-management-override');
+                if (tried.accepted) {
+                  for (const [ga, version] of missing) changes.push(`dependencyManagement: ${ga} -> ${version}`);
+                }
+              } else {
+                summaryLines.push('Phase 5A skipped: no missing packages for dependencyManagement.');
               }
             }
-            classpathOverrides.length = 0;
-            classpathOverrides.push(...classpathOverrideMap.entries());
 
-            const buildscriptMarkerStart = "// dependabot-auto-fix:buildscript-classpath-overrides:start";
-            const buildscriptMarkerEnd = "// dependabot-auto-fix:buildscript-classpath-overrides:end";
-            const esc = (v) => String(v).replace(/'/g, "\\'");
-            const renderBuildscriptOverrides = (items) => {
-              if (!items.length) return "";
-              const forces = items
-                .sort((a, b) => a[0].localeCompare(b[0]))
-                .map(([pkg, fixedVersion]) => {
-                  return `      force '${esc(pkg)}:${esc(fixedVersion)}'`;
-                })
-                .join("\n");
+            if (!clean) {
+              const missingForForce = [...targetByPackage.entries()].filter(([ga]) => !packageDeclared(workingContent, ga));
+              if (missingForForce.length) {
+                const next = upsertForceOverrides(workingContent, missingForForce);
+                const tried = tryCandidate('Phase 5B (buildscript resolutionStrategy.force)', next, 'classpath-force-override');
+                if (tried.accepted) {
+                  for (const [ga, version] of missingForForce) changes.push(`force: ${ga} -> ${version}`);
+                }
+              } else {
+                summaryLines.push('Phase 5B skipped: no missing packages for force overrides.');
+              }
+            }
 
-              return [
-                buildscriptMarkerStart,
-                "buildscript {",
-                "  configurations.classpath {",
-                "    resolutionStrategy {",
-                forces,
-                "    }",
-                "  }",
-                "}",
-                buildscriptMarkerEnd,
-                "",
-              ].join("\n");
-            };
+            if (clean) {
+              const overridePkgs = extractOverridePackages(workingContent);
+              if (overridePkgs.length) summaryLines.push(`Cleanup phase: evaluating ${overridePkgs.length} override entries.`);
 
-            const managedBuildscriptRegex = new RegExp(
-              `${escapeRegex(buildscriptMarkerStart)}[\\s\\S]*?${escapeRegex(buildscriptMarkerEnd)}\\n?`,
-              "m"
+              for (const ga of overridePkgs) {
+                const candidate = removeOverridePackage(workingContent, ga);
+                if (candidate === workingContent) continue;
+                fs.writeFileSync(buildFile, candidate, 'utf8');
+                const result = runValidation();
+                if (result.ok && result.clean) {
+                  workingContent = candidate;
+                  summaryLines.push(`Cleanup: removed unnecessary override for ${ga}.`);
+                } else {
+                  fs.writeFileSync(buildFile, workingContent, 'utf8');
+                  summaryLines.push(`Cleanup: kept override for ${ga} (still required).`);
+                }
+              }
+            }
+
+            fs.writeFileSync(buildFile, workingContent, 'utf8');
+
+            const changed = workingContent !== originalContent;
+            const status = clean ? 'fixed' : 'unresolved';
+
+            if (!changes.length) {
+              changes.push('No effective dependency version changes were applied.');
+            }
+
+            const summary = [
+              `Status: ${status}`,
+              `Changed: ${changed}`,
+              `Clean: ${clean}`,
+              `Strategy: ${selectedStrategy}`,
+              '',
+              'Applied changes:',
+              ...changes.map((c) => `- ${c}`),
+              '',
+              'Execution log:',
+              ...summaryLines.map((l) => `- ${l}`),
+              '',
+            ].join('\n');
+
+            fs.writeFileSync('remediation-summary.txt', summary, 'utf8');
+            fs.writeFileSync(
+              'remediation-state.json',
+              JSON.stringify({ status, changed, clean, strategy: selectedStrategy, changes }, null, 2)
             );
-            const renderedBuildscript = renderBuildscriptOverrides(classpathOverrides);
-            if (managedBuildscriptRegex.test(content)) {
-              content = content.replace(managedBuildscriptRegex, renderedBuildscript);
-            } else if (renderedBuildscript) {
-              content = `${renderedBuildscript}${content}`;
-            }
-            for (const [pkg, fixedVersion] of classpathOverrides) {
-              updates.push(`${pkg} -> ${fixedVersion} (managed buildscript classpath override)`);
-            }
 
-            // Persist output files for inspection and later PR creation.
-            fs.writeFileSync(buildFile, content, "utf8");
-            fs.writeFileSync("remediation-summary.txt", updates.join("\n") + "\n", "utf8");
-            core.info(`Remediation applied for ${targetByPackage.size} package(s).`);
+            core.setOutput('status', status);
+            core.setOutput('changed', String(changed));
+            core.setOutput('clean', String(clean));
+            core.setOutput('strategy', selectedStrategy);
 
       - name: Create remediation patch artifact
         if: always()
@@ -515,24 +611,18 @@ jobs:
             build.gradle
             dependabot-auto-fix.patch
             remediation-summary.txt
+            remediation-state.json
 
-      - name: Validate remediated build
-        id: validate
-        continue-on-error: true
+      - name: Fail when remediation is unresolved
+        if: steps.engine.outputs.status == 'unresolved'
         run: |
-          # Validation runs after artifacts are uploaded so failures are debuggable.
-          chmod +x ./gradlew
-          ./gradlew clean test
-
-      - name: Fail when remediation is not build-safe
-        if: steps.validate.outcome != 'success'
-        run: |
-          echo "Auto-fix produced an invalid build. Check dependabot-auto-fix artifact."
+          echo "Auto-fix could not reach a clean dependency-check result."
           exit 1
 
   dependabot-create-pr:
     name: Create PR
     needs: dependabot-auto-fix
+    if: needs.dependabot-auto-fix.outputs.changed == 'true' && needs.dependabot-auto-fix.outputs.clean == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -560,6 +650,11 @@ jobs:
           fi
 
           cp .autofix-results/build.gradle build.gradle
+
+          if [ -f ".autofix-results/remediation-summary.txt" ]; then
+            cp .autofix-results/remediation-summary.txt remediation-summary.txt
+          fi
+
           rm -rf .autofix-results
 
           if git diff --quiet -- build.gradle; then
@@ -573,27 +668,24 @@ jobs:
         if: steps.prepare.outputs.changed == 'true'
         run: |
           git status --short
-          test ! -d .autofix-results
           CHANGED_FILES="$(git diff --name-only)"
-          if [ "$CHANGED_FILES" != "build.gradle" ]; then
+          if [ "$CHANGED_FILES" != "build.gradle" ] && [ "$CHANGED_FILES" != $'build.gradle\nremediation-summary.txt' ] && [ "$CHANGED_FILES" != $'remediation-summary.txt\nbuild.gradle' ]; then
             echo "Unexpected files changed before PR creation:"
             echo "$CHANGED_FILES"
             exit 1
           fi
 
-      - name: Create auto-fix pull request
+      - name: Create or update auto-fix pull request
         if: steps.prepare.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
           base: ${{ github.ref_name }}
-          commit-message: "chore: apply dependabot auto-fix updates"
-          title: "chore: apply dependabot auto-fix updates"
-          body: |
-            Automated update generated by `dependabot-auto-fix.yml`.
-            - Source run: `${{ github.run_id }}`
-            - Source SHA: `${{ github.sha }}`
-          branch: "chore/dependabot-auto-fix-${{ github.run_id }}"
+          branch: chore/dependabot-auto-fix
           delete-branch: true
+          commit-message: 'chore: apply dependabot auto-fix updates'
+          title: 'chore: apply dependabot auto-fix updates'
+          body-path: remediation-summary.txt
           add-paths: |
             build.gradle
+            remediation-summary.txt
