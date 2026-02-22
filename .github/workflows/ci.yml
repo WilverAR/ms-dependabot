@@ -27,9 +27,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Submit dependency snapshot (Gradle)
-        uses: gradle/actions/dependency-submission@v5
-
       - name: Build
         run: |
           chmod +x ./gradlew

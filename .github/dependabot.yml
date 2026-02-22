@@ -21,13 +21,12 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-    # Agrupa solo version updates (minor/patch).
-    # Security updates quedan fuera de este grupo para no bloquearse.
     groups:
       gradle-version-updates:
         patterns:
           - "*"
         update-types:
+          - "major"
           - "minor"
           - "patch"
         applies-to: "version-updates"

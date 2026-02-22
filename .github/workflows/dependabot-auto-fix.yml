@@ -33,8 +33,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Submit dependency snapshot (Gradle)
-        uses: gradle/actions/dependency-submission@v5
+#      - name: Submit dependency snapshot (Gradle)
+#        uses: gradle/actions/dependency-submission@v5
 
       - name: Fetch Dependabot alerts
         uses: actions/github-script@v7
