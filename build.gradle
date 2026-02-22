@@ -1,30 +1,8 @@
-// dependabot-auto-fix:buildscript-classpath-overrides:start
-buildscript {
-  configurations.classpath {
-    resolutionStrategy.eachDependency { details ->
-      if (details.requested.group == 'ch.qos.logback' && details.requested.name == 'logback-core') {
-        details.useVersion('1.5.25')
-      }
-      if (details.requested.group == 'io.netty' && details.requested.name == 'netty-codec-http') {
-        details.useVersion('4.1.129.Final')
-      }
-      if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-compress') {
-        details.useVersion('1.26.0')
-      }
-      if (details.requested.group == 'org.apache.commons' && details.requested.name == 'commons-lang3') {
-        details.useVersion('3.18.0')
-      }
-      if (details.requested.group == 'org.assertj' && details.requested.name == 'assertj-core') {
-        details.useVersion('3.27.7')
-      }
-    }
-  }
-}
-// dependabot-auto-fix:buildscript-classpath-overrides:end
 plugins {
 	id 'java'
 	id 'org.springframework.boot' version '3.4.10'
 	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.owasp.dependencycheck' version '12.1.8'
 }
 
 group = 'com.ghas'
@@ -41,19 +19,6 @@ repositories {
 	mavenCentral()
 }
 
-dependencyManagement {
-	imports {
-	}
-	dependencies {
-	
-		dependency 'ch.qos.logback:logback-core:1.5.25'
-		dependency 'io.netty:netty-codec-http:4.1.129.Final'
-		dependency 'org.apache.commons:commons-compress:1.26.0'
-		dependency 'org.assertj:assertj-core:3.27.7'
-		dependency 'ch.qos.logback:logback-classic:1.5.25'
-}
-}
-
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webflux'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
@@ -63,4 +28,8 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+}
+
+dependencyCheck {
+	failBuildOnCVSS = 7
 }
