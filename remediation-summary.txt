@@ -1,0 +1,16 @@
+Status: fixed
+Changed: true
+Clean: true
+Strategy: dependency-management-override
+
+Applied changes:
+- dependencyManagement: org.apache.activemq:artemis-project -> 2.40.0
+
+Execution log:
+- Phase 3 skipped: project is not Spring Boot aware or no managed-family alerts found.
+- Phase 4 skipped: no explicit dependency declarations to update.
+- Phase 5A (dependencyManagement overrides): validating...
+- Phase 5A (dependencyManagement overrides): validation OK, vulnerable_items=0
+- Phase 5A (dependencyManagement overrides): dependencyCheck clean.
+- Cleanup phase: evaluating 1 override entries.
+- Cleanup: removed unnecessary override for org.apache.activemq:artemis-project.
