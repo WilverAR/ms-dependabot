@@ -1,11 +1,22 @@
 Status: fixed
 Changed: true
 Clean: true
-Strategy: boot-minor
+Strategy: dependency-management-override
 
 Applied changes:
-- Spring Boot: 3.4.13 -> 3.5.11 (boot-minor)
+- dependencyManagement: org.apache.activemq:artemis-project -> 2.40.0
+- dependencyManagement: ch.qos.logback:logback-core -> 1.5.25
+- dependencyManagement: org.apache.commons:commons-compress -> 1.26.0
+- dependencyManagement: org.assertj:assertj-core -> 3.27.7
+- dependencyManagement: org.apache.commons:commons-lang3 -> 3.18.0
 
 Execution log:
-- Phase 3 (boot-minor) Spring Boot 3.4.13 -> 3.5.11: validating...
-- Phase 3 (boot-minor) Spring Boot 3.4.13 -> 3.5.11: validation OK.
+- Phase 4 skipped: no explicit dependency declarations to update.
+- Phase 5A (dependencyManagement overrides): validating...
+- Phase 5A (dependencyManagement overrides): validation OK.
+- Cleanup phase: evaluating 5 override entries.
+- Cleanup: removed unnecessary override for org.apache.activemq:artemis-project.
+- Cleanup: removed unnecessary override for ch.qos.logback:logback-core.
+- Cleanup: removed unnecessary override for org.apache.commons:commons-compress.
+- Cleanup: removed unnecessary override for org.assertj:assertj-core.
+- Cleanup: removed unnecessary override for org.apache.commons:commons-lang3.
