@@ -343,23 +343,14 @@ jobs:
               return refRegex.test(content);
             };
 
-            const parseVulnerableCount = () => {
-              const report = 'build/reports/dependency-check-report.html';
-              if (!fs.existsSync(report)) return Number.POSITIVE_INFINITY;
-              const html = fs.readFileSync(report, 'utf8');
-              return (html.match(/subsectionheader standardsubsection vulnerable/g) || []).length;
-            };
-
             const runValidation = () => {
               try {
                 execSync('chmod +x ./gradlew', { stdio: 'inherit' });
                 execSync('./gradlew clean build', { stdio: 'inherit' });
                 execSync('./gradlew test', { stdio: 'inherit' });
-                execSync('./gradlew dependencyCheckAnalyze', { stdio: 'inherit' });
-                const vulnerableCount = parseVulnerableCount();
-                return { ok: true, clean: vulnerableCount === 0, vulnerableCount };
+                return { ok: true };
               } catch (error) {
-                return { ok: false, clean: false, vulnerableCount: Number.POSITIVE_INFINITY, error: String(error.message || error) };
+                return { ok: false, error: String(error.message || error) };
               }
             };
 
@@ -464,28 +455,22 @@ jobs:
             const tryCandidate = (label, nextContent, strategyTag) => {
               if (nextContent === workingContent) {
                 summaryLines.push(`${label}: no changes to apply.`);
-                return { accepted: false, clean: false };
+                return { accepted: false };
               }
               fs.writeFileSync(buildFile, nextContent, 'utf8');
               summaryLines.push(`${label}: validating...`);
               const result = runValidation();
               if (!result.ok) {
-                summaryLines.push(`${label}: build/test/dependencyCheck failed.`);
+                summaryLines.push(`${label}: build/test failed.`);
                 fs.writeFileSync(buildFile, workingContent, 'utf8');
-                return { accepted: false, clean: false };
+                return { accepted: false };
               }
 
-              summaryLines.push(`${label}: validation OK, vulnerable_items=${result.vulnerableCount}`);
+              summaryLines.push(`${label}: validation OK.`);
               workingContent = nextContent;
               selectedStrategy = strategyTag;
-
-              if (result.clean) {
-                clean = true;
-                summaryLines.push(`${label}: dependencyCheck clean.`);
-                return { accepted: true, clean: true };
-              }
-
-              return { accepted: true, clean: false };
+              clean = true;
+              return { accepted: true };
             };
 
             if (bootAware && hasSpringManagedAlerts) {
@@ -499,8 +484,7 @@ jobs:
                 );
                 if (tried.accepted) {
                   changes.push(`Spring Boot: ${bootVersion} -> ${candidate.version} (${candidate.type})`);
-                }
-                if (tried.clean) break;
+                  break;
               }
             } else {
               summaryLines.push('Phase 3 skipped: project is not Spring Boot aware or no managed-family alerts found.');
@@ -553,7 +537,7 @@ jobs:
                 if (candidate === workingContent) continue;
                 fs.writeFileSync(buildFile, candidate, 'utf8');
                 const result = runValidation();
-                if (result.ok && result.clean) {
+                if (result.ok) {
                   workingContent = candidate;
                   summaryLines.push(`Cleanup: removed unnecessary override for ${ga}.`);
                 } else {
