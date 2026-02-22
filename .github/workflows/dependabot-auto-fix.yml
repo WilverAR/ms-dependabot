@@ -485,6 +485,7 @@ jobs:
                 if (tried.accepted) {
                   changes.push(`Spring Boot: ${bootVersion} -> ${candidate.version} (${candidate.type})`);
                   break;
+                }
               }
             } else {
               summaryLines.push('Phase 3 skipped: project is not Spring Boot aware or no managed-family alerts found.');
