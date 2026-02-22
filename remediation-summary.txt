@@ -1,11 +1,11 @@
 Status: fixed
 Changed: true
 Clean: true
-Strategy: boot-patch
+Strategy: boot-minor
 
 Applied changes:
-- Spring Boot: 3.4.10 -> 3.4.13 (boot-patch)
+- Spring Boot: 3.4.13 -> 3.5.11 (boot-minor)
 
 Execution log:
-- Phase 3 (boot-patch) Spring Boot 3.4.10 -> 3.4.13: validating...
-- Phase 3 (boot-patch) Spring Boot 3.4.10 -> 3.4.13: validation OK.
+- Phase 3 (boot-minor) Spring Boot 3.4.13 -> 3.5.11: validating...
+- Phase 3 (boot-minor) Spring Boot 3.4.13 -> 3.5.11: validation OK.
