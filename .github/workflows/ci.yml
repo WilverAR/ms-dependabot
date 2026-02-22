@@ -9,7 +9,11 @@ permissions:
 
 jobs:
   build:
+    name: Clean Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      security-events: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,8 +24,8 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          distribution: temurin
+          java-version: 17
 
       - name: Submit dependency snapshot (Gradle)
         uses: gradle/actions/dependency-submission@v5
