@@ -18,7 +18,7 @@ jobs:
     name: Analyze Alerts
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       security-events: read
     steps:
       - name: Checkout repository
